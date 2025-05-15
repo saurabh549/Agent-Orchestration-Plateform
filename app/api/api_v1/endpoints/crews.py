@@ -1,6 +1,7 @@
-from typing import Any, List
+from typing import Any, List, Dict
+import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.db.deps import get_db, get_current_user
@@ -16,6 +17,7 @@ from app.schemas.crew import (
     CrewMemberCreate,
     CrewMemberUpdate
 )
+from app.services.crew_kernel_manager import crew_kernel_manager
 
 router = APIRouter()
 
@@ -39,11 +41,12 @@ def read_crews(
     return crews
 
 @router.post("", response_model=AgentCrewWithMembers)
-def create_crew(
+async def create_crew(
     *,
     db: Session = Depends(get_db),
     crew_in: AgentCrewCreate,
     current_user: User = Depends(get_current_user),
+    background_tasks: BackgroundTasks,
 ) -> Any:
     """
     Create new agent crew.
@@ -82,6 +85,13 @@ def create_crew(
     db.commit()
     db.refresh(crew)
     
+    # Initialize the kernel for this crew in the background
+    background_tasks.add_task(
+        _init_crew_kernel,
+        crew_id=crew.id,
+        db=db
+    )
+    
     # Get full crew with members
     crew_with_members = db.query(AgentCrew).filter(AgentCrew.id == crew.id).first()
     return crew_with_members
@@ -109,12 +119,13 @@ def read_crew(
     return crew
 
 @router.put("/{crew_id}", response_model=AgentCrewWithMembers)
-def update_crew(
+async def update_crew(
     *,
     db: Session = Depends(get_db),
     crew_id: int,
     crew_in: AgentCrewUpdate,
     current_user: User = Depends(get_current_user),
+    background_tasks: BackgroundTasks,
 ) -> Any:
     """
     Update a crew.
@@ -136,7 +147,9 @@ def update_crew(
         setattr(crew, field, value)
     
     # Handle members update if provided
+    members_changed = False
     if crew_in.members is not None:
+        members_changed = True
         # Remove existing members
         db.query(CrewMember).filter(CrewMember.crew_id == crew.id).delete()
         
@@ -152,6 +165,15 @@ def update_crew(
     db.add(crew)
     db.commit()
     db.refresh(crew)
+    
+    # If members were changed, refresh the kernel for this crew
+    if members_changed:
+        background_tasks.add_task(
+            _refresh_crew_kernel,
+            crew_id=crew.id,
+            db=db
+        )
+    
     return crew
 
 @router.delete("/{crew_id}", response_model=AgentCrewSchema)
@@ -183,12 +205,13 @@ def delete_crew(
     return crew
 
 @router.post("/{crew_id}/members", response_model=CrewMemberSchema)
-def add_crew_member(
+async def add_crew_member(
     *,
     db: Session = Depends(get_db),
     crew_id: int,
     member_in: CrewMemberCreate,
     current_user: User = Depends(get_current_user),
+    background_tasks: BackgroundTasks,
 ) -> Any:
     """
     Add member to a crew.
@@ -232,15 +255,24 @@ def add_crew_member(
     db.add(crew_member)
     db.commit()
     db.refresh(crew_member)
+    
+    # Refresh the crew's kernel in the background
+    background_tasks.add_task(
+        _refresh_crew_kernel,
+        crew_id=crew.id,
+        db=db
+    )
+    
     return crew_member
 
 @router.delete("/{crew_id}/members/{member_id}", response_model=CrewMemberSchema)
-def remove_crew_member(
+async def remove_crew_member(
     *,
     db: Session = Depends(get_db),
     crew_id: int,
     member_id: int,
     current_user: User = Depends(get_current_user),
+    background_tasks: BackgroundTasks,
 ) -> Any:
     """
     Remove member from a crew.
@@ -269,4 +301,90 @@ def remove_crew_member(
     
     db.delete(crew_member)
     db.commit()
-    return crew_member 
+    
+    # Refresh the crew's kernel in the background
+    background_tasks.add_task(
+        _refresh_crew_kernel,
+        crew_id=crew.id,
+        db=db
+    )
+    
+    return crew_member
+
+@router.get("/{crew_id}/kernel/info", response_model=List[Dict[str, Any]])
+def get_crew_kernel_info(
+    *,
+    db: Session = Depends(get_db),
+    crew_id: int,
+    current_user: User = Depends(get_current_user),
+    background_tasks: BackgroundTasks,
+) -> Any:
+    """
+    Get information about the crew's Semantic Kernel plugins.
+    """
+    crew = (
+        db.query(AgentCrew)
+        .filter(AgentCrew.id == crew_id, AgentCrew.owner_id == current_user.id)
+        .first()
+    )
+    if not crew:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Crew not found or you don't have permission to access it",
+        )
+    
+    # Get the plugin info for this crew
+    plugin_info = crew_kernel_manager.get_crew_plugin_info(crew_id)
+    
+    # If there's no kernel yet, create one in the background
+    if not plugin_info:
+        # Initialize kernel in background
+        background_tasks.add_task(
+            _init_crew_kernel,
+            crew_id=crew.id,
+            db=db
+        )
+        return []
+    
+    return plugin_info
+
+@router.post("/{crew_id}/kernel/refresh", response_model=dict)
+async def refresh_crew_kernel(
+    *,
+    db: Session = Depends(get_db),
+    crew_id: int,
+    current_user: User = Depends(get_current_user),
+) -> Any:
+    """
+    Force refresh of a crew's kernel.
+    """
+    crew = (
+        db.query(AgentCrew)
+        .filter(AgentCrew.id == crew_id, AgentCrew.owner_id == current_user.id)
+        .first()
+    )
+    if not crew:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Crew not found or you don't have permission to access it",
+        )
+    
+    # Refresh the kernel
+    await _refresh_crew_kernel(crew_id, db)
+    
+    return {"status": "success", "message": "Crew kernel refreshed successfully"}
+
+# Helper functions for background tasks
+async def _init_crew_kernel(crew_id: int, db: Session):
+    """Initialize a crew's kernel in the background"""
+    try:
+        await crew_kernel_manager.get_crew_kernel(db, crew_id)
+    except Exception as e:
+        print(f"Error initializing kernel for crew {crew_id}: {str(e)}")
+
+async def _refresh_crew_kernel(crew_id: int, db: Session):
+    """Refresh a crew's kernel in the background"""
+    try:
+        await crew_kernel_manager.refresh_crew_kernel(db, crew_id)
+    except Exception as e:
+        print(f"Error refreshing kernel for crew {crew_id}: {str(e)}") 

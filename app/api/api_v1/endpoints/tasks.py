@@ -17,7 +17,9 @@ from app.schemas.task import (
     TaskMessage as TaskMessageSchema,
     TaskMessageCreate,
 )
+# Import both task execution methods
 from app.services.task_executor import execute_task_with_crew
+from app.services.plugin_task_service import execute_task_with_crew_kernel
 
 router = APIRouter()
 
@@ -80,7 +82,55 @@ def create_task(
     db.commit()
     db.refresh(task)
     
-    # Start task execution in background
+    # Use the new plugin-based task execution
+    background_tasks.add_task(
+        execute_task_with_crew_kernel,
+        task_id=task.id,
+        db=db
+    )
+    
+    return task
+
+@router.post("/legacy", response_model=TaskSchema)
+def create_legacy_task(
+    *,
+    db: Session = Depends(get_db),
+    task_in: TaskCreate,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+) -> Any:
+    """
+    Create new task using the legacy execution method.
+    """
+    # Check if crew exists and belongs to the user
+    crew = (
+        db.query(AgentCrew)
+        .filter(
+            AgentCrew.id == task_in.crew_id,
+            AgentCrew.owner_id == current_user.id,
+            AgentCrew.is_active == True
+        )
+        .first()
+    )
+    if not crew:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Crew not found or you don't have permission to access it",
+        )
+    
+    # Create task
+    task = Task(
+        title=task_in.title,
+        description=task_in.description,
+        creator_id=current_user.id,
+        crew_id=task_in.crew_id,
+        status=TaskStatus.PENDING
+    )
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    
+    # Use the original task execution method
     background_tasks.add_task(
         execute_task_with_crew,
         task_id=task.id,
@@ -97,7 +147,7 @@ def read_task(
     current_user: User = Depends(get_current_user),
 ) -> Any:
     """
-    Get specific task by ID with messages.
+    Get specific task by ID.
     """
     task = (
         db.query(Task)
@@ -107,7 +157,7 @@ def read_task(
     if not task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Task not found or you don't have permission to access it",
+            detail="Task not found",
         )
     return task
 
@@ -120,7 +170,7 @@ def update_task(
     current_user: User = Depends(get_current_user),
 ) -> Any:
     """
-    Update a task (only possible if task is pending).
+    Update a task.
     """
     task = (
         db.query(Task)
@@ -130,14 +180,14 @@ def update_task(
     if not task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Task not found or you don't have permission to access it",
+            detail="Task not found",
         )
     
-    # Can only update pending tasks
-    if task.status != TaskStatus.PENDING:
+    # Only allow updates if task is not in progress
+    if task.status == TaskStatus.IN_PROGRESS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot update task with status {task.status}. Only pending tasks can be updated.",
+            detail="Cannot update a task that is in progress",
         )
     
     update_data = task_in.dict(exclude_unset=True)
@@ -150,7 +200,7 @@ def update_task(
     return task
 
 @router.post("/{task_id}/messages", response_model=TaskMessageSchema)
-def create_task_message(
+def add_task_message(
     *,
     db: Session = Depends(get_db),
     task_id: int,
@@ -168,21 +218,13 @@ def create_task_message(
     if not task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Task not found or you don't have permission to access it",
-        )
-    
-    # Only allow messages for in-progress tasks
-    if task.status != TaskStatus.IN_PROGRESS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot add messages to task with status {task.status}. Task must be in progress.",
+            detail="Task not found",
         )
     
     message = TaskMessage(
         task_id=task.id,
-        agent_id=message_in.agent_id,
         content=message_in.content,
-        is_system=message_in.is_system
+        is_system=False
     )
     db.add(message)
     db.commit()
@@ -207,14 +249,14 @@ def delete_task(
     if not task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Task not found or you don't have permission to access it",
+            detail="Task not found",
         )
     
-    # Can only delete tasks that are not in progress
+    # Only allow deletion if task is not in progress
     if task.status == TaskStatus.IN_PROGRESS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot delete a task that is currently in progress.",
+            detail="Cannot delete a task that is in progress",
         )
     
     db.delete(task)
