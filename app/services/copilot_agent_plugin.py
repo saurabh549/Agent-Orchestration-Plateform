@@ -2,8 +2,8 @@ import json
 from typing import Dict, Any, Optional, List
 
 from semantic_kernel.functions import kernel_function
-from semantic_kernel.functions.kernel_function_metadata import KernelFunctionMetadata
-from semantic_kernel.plugins import KernelPlugin
+from semantic_kernel.functions import KernelFunctionMetadata
+from semantic_kernel.functions import KernelPlugin
 
 from app.services.copilot_client import CopilotStudioClient
 from app.observability.telemetry import AgentCallTracker

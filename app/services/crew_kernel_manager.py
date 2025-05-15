@@ -3,7 +3,8 @@ from typing import Dict, Optional, Any, List
 import asyncio
 
 from semantic_kernel import Kernel
-from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion, AzureChatCompletion
+from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
+from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
 from sqlalchemy.orm import Session
 
 from app.core.config import settings

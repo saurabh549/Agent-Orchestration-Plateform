@@ -4,7 +4,8 @@ from typing import Dict, List, Any, Optional
 
 import semantic_kernel as sk
 from semantic_kernel import Kernel
-from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion, AzureChatCompletion
+from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
+from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
 from semantic_kernel.functions import kernel_function
 from sqlalchemy.orm import Session
 
