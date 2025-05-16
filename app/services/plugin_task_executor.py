@@ -4,6 +4,7 @@ from typing import Dict, List, Any, Optional
 
 import semantic_kernel as sk
 from semantic_kernel import Kernel
+from semantic_kernel.functions.kernel_arguments import KernelArguments
 from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
 from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
 from semantic_kernel.functions import kernel_function
@@ -48,9 +49,6 @@ class PluginTaskExecutor:
                 "role": member.role
             }
         
-        # Initialize Copilot client
-        self.copilot_client = CopilotStudioClient(settings.DIRECT_LINE_SECRET)
-        
         # Initialize Semantic Kernel components
         self.kernel = None
         self.llm_model = "gpt-4"  # Will be updated during setup
@@ -87,9 +85,9 @@ class PluginTaskExecutor:
         for agent_id, info in self.agents.items():
             agent = info["agent"]
             plugin = CopilotAgentPlugin(
-                copilot_client=self.copilot_client,
                 agent_id=agent_id,
                 agent_name=agent.name,
+                direct_line_secret=agent.direct_line_secret,
                 capabilities=agent.capabilities,
                 role=info["role"],
                 task_id=self.task_id
@@ -124,10 +122,11 @@ class PluginTaskExecutor:
         """
         
         # Create the orchestrator function
-        orchestrator = self.kernel.create_function_from_prompt(
+        orchestrator = self.kernel.add_function(
+            plugin_name="task_orchestrator",
             function_name="task_orchestrator",
-            prompt=orchestrator_prompt,
-            description="Orchestrates complex tasks by delegating to specialized agents"
+            description="Orchestrates complex tasks by delegating to specialized agents",
+            prompt=orchestrator_prompt
         )
         
         return orchestrator
@@ -160,7 +159,7 @@ class PluginTaskExecutor:
                 orchestrator = self.create_orchestration_function()
                 
                 # Prepare kernel context with task details
-                context = self.kernel.create_new_context()
+                context = KernelArguments()
                 context["task_description"] = self.task.description
                 context["crew_name"] = self.crew.name
                 
@@ -188,7 +187,10 @@ class PluginTaskExecutor:
                 
                 # Execute task orchestration using LLM with plugin function calling
                 with LLMCallTracker(self.llm_model, "orchestrator", self.task.description) as llm_tracker:
-                    result = await orchestrator.invoke(context=context)
+                    result = await orchestrator.invoke(
+                        task_description=self.task.description,
+                        crew_name=self.crew.name
+                    )
                     # Record the result
                     llm_tracker.response = str(result)
                 

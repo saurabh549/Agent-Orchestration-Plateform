@@ -33,12 +33,14 @@ class Settings(BaseSettings):
     
     # Semantic Kernel
     OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
+    OPENAI_ENDPOINT: str = os.environ.get("OPENAI_ENDPOINT", "")
     AZURE_OPENAI_API_KEY: Optional[str] = os.environ.get("AZURE_OPENAI_API_KEY", "")
     AZURE_OPENAI_ENDPOINT: Optional[str] = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+    GEMINI_API_KEY: Optional[str] = os.environ.get("GEMINI_API_KEY", "")
     
     # Observability
     OTEL_EXPORTER_OTLP_ENDPOINT: str = os.environ.get(
-        "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
+        "OTEL_EXPORTER_OTLP_ENDPOINT", ""
     )
     PROMETHEUS_ENDPOINT: str = "/metrics"
 

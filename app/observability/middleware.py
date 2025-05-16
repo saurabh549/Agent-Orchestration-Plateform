@@ -2,17 +2,24 @@ import time
 from typing import Callable
 
 from fastapi import FastAPI, Request, Response
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from prometheus_client import Counter, Histogram, generate_latest
 
 from app.core.config import settings
 from app.db.base import engine
+
+# Optional imports for OpenTelemetry
+# These will only be used if OTEL is enabled
+try:
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+    from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+    OTEL_AVAILABLE = True
+except ImportError:
+    OTEL_AVAILABLE = False
 
 # Prometheus metrics
 REQUEST_COUNT = Counter(
@@ -42,8 +49,8 @@ AGENT_USAGE = Counter(
 def setup_observability(app: FastAPI) -> None:
     """Set up observability for the FastAPI application."""
     
-    # Only set up OpenTelemetry if endpoint is configured
-    if settings.OTEL_EXPORTER_OTLP_ENDPOINT:
+    # Only set up OpenTelemetry if endpoint is configured and not default
+    if OTEL_AVAILABLE and settings.OTEL_EXPORTER_OTLP_ENDPOINT and "localhost:4317" not in settings.OTEL_EXPORTER_OTLP_ENDPOINT:
         # Set up OpenTelemetry
         resource = Resource(attributes={
             SERVICE_NAME: settings.PROJECT_NAME

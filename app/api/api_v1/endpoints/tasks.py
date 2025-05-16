@@ -54,6 +54,7 @@ def create_task(
     """
     Create new task and assign it to a crew.
     """
+    print(f"\n[API] Creating task with plugin-based execution: {task_in.title}")
     # Check if crew exists and belongs to the user
     crew = (
         db.query(AgentCrew)
@@ -65,6 +66,7 @@ def create_task(
         .first()
     )
     if not crew:
+        print(f"[API] Error: Crew not found or permissions issue")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Crew not found or you don't have permission to access it",
@@ -81,6 +83,8 @@ def create_task(
     db.add(task)
     db.commit()
     db.refresh(task)
+    
+    print(f"[API] Task created with ID {task.id}, scheduling execution with plugin-based approach")
     
     # Use the new plugin-based task execution
     background_tasks.add_task(
@@ -102,6 +106,7 @@ def create_legacy_task(
     """
     Create new task using the legacy execution method.
     """
+    print(f"\n[API] Creating task with legacy execution: {task_in.title}")
     # Check if crew exists and belongs to the user
     crew = (
         db.query(AgentCrew)
@@ -113,6 +118,7 @@ def create_legacy_task(
         .first()
     )
     if not crew:
+        print(f"[API] Error: Crew not found or permissions issue")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Crew not found or you don't have permission to access it",
@@ -129,6 +135,8 @@ def create_legacy_task(
     db.add(task)
     db.commit()
     db.refresh(task)
+    
+    print(f"[API] Task created with ID {task.id}, scheduling execution with legacy approach")
     
     # Use the original task execution method
     background_tasks.add_task(

@@ -20,7 +20,6 @@ class CrewMemberInDBBase(CrewMemberBase):
     crew_id: int
 
     class Config:
-        orm_mode = True
         from_attributes = True
 
 class CrewMember(CrewMemberInDBBase):
@@ -49,7 +48,6 @@ class AgentCrewInDBBase(AgentCrewBase):
     updated_at: Optional[datetime] = None
 
     class Config:
-        orm_mode = True
         from_attributes = True
 
 class AgentCrew(AgentCrewInDBBase):

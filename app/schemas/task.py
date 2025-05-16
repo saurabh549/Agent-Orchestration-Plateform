@@ -19,7 +19,6 @@ class TaskMessageInDBBase(TaskMessageBase):
     timestamp: datetime
 
     class Config:
-        orm_mode = True
         from_attributes = True
 
 class TaskMessage(TaskMessageInDBBase):
@@ -50,7 +49,6 @@ class TaskInDBBase(TaskBase):
     error: Optional[str] = None
 
     class Config:
-        orm_mode = True
         from_attributes = True
 
 class Task(TaskInDBBase):

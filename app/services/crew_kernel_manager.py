@@ -23,7 +23,6 @@ class CrewKernelManager:
     def __init__(self):
         """Initialize the manager"""
         self._kernels: Dict[int, Kernel] = {}  # crew_id -> kernel
-        self._copilot_client = CopilotStudioClient(settings.DIRECT_LINE_SECRET)
         self._kernel_locks = {}  # Locks to prevent race conditions on kernel creation
     
     async def get_crew_kernel(self, db: Session, crew_id: int) -> Kernel:
@@ -71,8 +70,14 @@ class CrewKernelManager:
         kernel = Kernel()
         
         # Configure AI backend based on config
-        if settings.AZURE_OPENAI_API_KEY and settings.AZURE_OPENAI_ENDPOINT:
+        has_valid_azure = (settings.AZURE_OPENAI_API_KEY and 
+                          settings.AZURE_OPENAI_ENDPOINT and 
+                          settings.AZURE_OPENAI_ENDPOINT != "your-azure-openai-endpoint-here" and
+                          "azure.com" in settings.AZURE_OPENAI_ENDPOINT)
+        
+        if has_valid_azure:
             # Azure OpenAI
+            print(f"[CrewKernel] Using Azure OpenAI with endpoint: {settings.AZURE_OPENAI_ENDPOINT}")
             kernel.add_service(
                 AzureChatCompletion(
                     service_id="chat_completion",
@@ -81,8 +86,20 @@ class CrewKernelManager:
                     api_key=settings.AZURE_OPENAI_API_KEY,
                 )
             )
+        elif settings.GEMINI_API_KEY:
+            # Google Gemini
+            print(f"[CrewKernel] Using Google Gemini API")
+            from semantic_kernel.connectors.ai.google.google_ai import GoogleAIChatCompletion
+            kernel.add_service(
+                GoogleAIChatCompletion(
+                    service_id="chat_completion",
+                    gemini_model_id="gemini-2.0-flash",
+                    api_key=settings.GEMINI_API_KEY,
+                )
+            )
         else:
             # OpenAI
+            print(f"[CrewKernel] Using OpenAI API")
             kernel.add_service(
                 OpenAIChatCompletion(
                     service_id="chat_completion",
@@ -106,16 +123,15 @@ class CrewKernelManager:
             
             # Create a plugin for this agent
             plugin = CopilotAgentPlugin(
-                copilot_client=self._copilot_client,
                 agent_id=agent.copilot_id,
                 agent_name=agent.name,
+                direct_line_secret=agent.direct_line_secret,
                 capabilities=agent.capabilities,
                 role=member.role
             )
             
-            # Add the plugin to the kernel
-            plugin_name = f"{agent.name.replace(' ', '')}Plugin"
-            kernel.add_plugin(plugin, plugin_name=plugin_name)
+            # Add the plugin to the kernel - plugin name is now set in the constructor
+            kernel.add_plugin(plugin)
         
         return kernel
     
@@ -165,15 +181,16 @@ class CrewKernelManager:
             for fn_name, fn in plugin.functions.items():
                 params = []
                 for param in fn.metadata.parameters:
+                    # Access KernelParameterMetadata properties instead of treating it as a tuple
                     params.append({
-                        "name": param[0],
-                        "type": param[1],
-                        "description": param[2]
+                        "name": param.name,
+                        "type": param.type_,
+                        "description": param.description or ""
                     })
                 
                 functions.append({
                     "name": fn_name,
-                    "description": fn.metadata.description,
+                    "description": fn.metadata.description or "",
                     "parameters": params
                 })
             

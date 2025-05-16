@@ -6,6 +6,7 @@ class AgentBase(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     copilot_id: Optional[str] = None
+    direct_line_secret: Optional[str] = None
     capabilities: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = True
 
@@ -13,6 +14,7 @@ class AgentBase(BaseModel):
 class AgentCreate(AgentBase):
     name: str
     copilot_id: str
+    direct_line_secret: str
 
 # Properties to receive via API on update
 class AgentUpdate(AgentBase):
@@ -23,7 +25,6 @@ class AgentInDBBase(AgentBase):
     id: int
 
     class Config:
-        orm_mode = True
         from_attributes = True
 
 # Additional properties to return via API

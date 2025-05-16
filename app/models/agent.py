@@ -10,6 +10,7 @@ class Agent(Base):
     name = Column(String, index=True)
     description = Column(Text)
     copilot_id = Column(String, unique=True, index=True)  # ID from Copilot Studio
+    direct_line_secret = Column(String)  # Direct Line secret for this specific agent
     capabilities = Column(JSON)  # JSON field to store agent capabilities
     is_active = Column(Boolean, default=True)
     
