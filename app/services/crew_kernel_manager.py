@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Dict, Optional, Any, List
 import asyncio
 
@@ -11,7 +12,7 @@ from app.core.config import settings
 from app.models.crew import AgentCrew, CrewMember
 from app.models.agent import Agent
 from app.services.copilot_client import CopilotStudioClient
-from app.services.copilot_agent_plugin import CopilotAgentPlugin
+from app.services.agent_pool import AgentPoolManager
 
 
 class CrewKernelManager:
@@ -55,6 +56,26 @@ class CrewKernelManager:
             self._kernels[crew_id] = kernel
             return kernel
     
+    def _sanitize_plugin_name(self, name: str) -> str:
+        """
+        Sanitize a name to be used as a plugin name.
+        Plugin names must match the pattern ^[0-9A-Za-z_]+$
+        
+        Args:
+            name: The name to sanitize
+            
+        Returns:
+            A sanitized name that can be used as a plugin name
+        """
+        # Replace spaces and non-alphanumeric characters with underscores
+        sanitized = re.sub(r'[^0-9A-Za-z_]', '_', name)
+        
+        # Ensure the name starts with a letter or underscore (not a number)
+        if sanitized and sanitized[0].isdigit():
+            sanitized = f"_{sanitized}"
+            
+        return sanitized
+    
     async def _create_kernel_for_crew(self, db: Session, crew_id: int) -> Kernel:
         """
         Create a Semantic Kernel instance for a crew with its agents registered as plugins.
@@ -70,44 +91,14 @@ class CrewKernelManager:
         kernel = Kernel()
         
         # Configure AI backend based on config
-        has_valid_azure = (settings.AZURE_OPENAI_API_KEY and 
-                          settings.AZURE_OPENAI_ENDPOINT and 
-                          settings.AZURE_OPENAI_ENDPOINT != "your-azure-openai-endpoint-here" and
-                          "azure.com" in settings.AZURE_OPENAI_ENDPOINT)
-        
-        if has_valid_azure:
-            # Azure OpenAI
-            print(f"[CrewKernel] Using Azure OpenAI with endpoint: {settings.AZURE_OPENAI_ENDPOINT}")
-            kernel.add_service(
-                AzureChatCompletion(
-                    service_id="chat_completion",
-                    deployment_name="gpt-4",
-                    endpoint=settings.AZURE_OPENAI_ENDPOINT,
-                    api_key=settings.AZURE_OPENAI_API_KEY,
-                )
+        from semantic_kernel.connectors.ai.google.google_ai import GoogleAIChatCompletion
+        kernel.add_service(
+            GoogleAIChatCompletion(
+                service_id="chat_completion",
+                gemini_model_id="gemini-2.0-flash",
+                api_key=settings.GEMINI_API_KEY,
             )
-        elif settings.GEMINI_API_KEY:
-            # Google Gemini
-            print(f"[CrewKernel] Using Google Gemini API")
-            from semantic_kernel.connectors.ai.google.google_ai import GoogleAIChatCompletion
-            kernel.add_service(
-                GoogleAIChatCompletion(
-                    service_id="chat_completion",
-                    gemini_model_id="gemini-2.0-flash",
-                    api_key=settings.GEMINI_API_KEY,
-                )
-            )
-        else:
-            # OpenAI
-            print(f"[CrewKernel] Using OpenAI API")
-            kernel.add_service(
-                OpenAIChatCompletion(
-                    service_id="chat_completion",
-                    ai_model_id="gpt-4",
-                    api_key=settings.OPENAI_API_KEY,
-                )
-            )
-        
+        )
         # Get crew and its members
         crew = db.query(AgentCrew).filter(AgentCrew.id == crew_id).first()
         if not crew:
@@ -115,23 +106,20 @@ class CrewKernelManager:
         
         crew_members = db.query(CrewMember).filter(CrewMember.crew_id == crew_id).all()
         
-        # Register each agent as a plugin
-        for member in crew_members:
-            agent = db.query(Agent).filter(Agent.id == member.agent_id).first()
-            if not agent:
-                continue
-            
-            # Create a plugin for this agent
-            plugin = CopilotAgentPlugin(
-                agent_id=agent.copilot_id,
-                agent_name=agent.name,
-                direct_line_secret=agent.direct_line_secret,
-                capabilities=agent.capabilities,
-                role=member.role
-            )
-            
-            # Add the plugin to the kernel - plugin name is now set in the constructor
-            kernel.add_plugin(plugin)
+        # Get all agents for this crew
+        agent_ids = [member.agent_id for member in crew_members]
+        agents = db.query(Agent).filter(Agent.id.in_(agent_ids)).all()
+        
+        # Create an AgentPool instance using the AgentPoolManager
+        agent_pool = AgentPoolManager.create_agent_pool(crew_members, agents)
+        
+        # Create a valid plugin name
+        plugin_name = self._sanitize_plugin_name(f"{crew.name}Agents")
+        
+        # Register the agent pool with the kernel
+        AgentPoolManager.register_with_kernel(agent_pool, kernel, plugin_name=plugin_name)
+        
+        print(f"[CrewKernel] Kernel plugins: {kernel.plugins}")
         
         return kernel
     

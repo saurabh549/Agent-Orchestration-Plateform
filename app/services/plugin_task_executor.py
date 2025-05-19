@@ -1,21 +1,19 @@
 import json
+import re
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
-import semantic_kernel as sk
 from semantic_kernel import Kernel
 from semantic_kernel.functions.kernel_arguments import KernelArguments
 from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
 from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
-from semantic_kernel.functions import kernel_function
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.task import Task, TaskMessage, TaskStatus
 from app.models.crew import AgentCrew, CrewMember
 from app.models.agent import Agent
-from app.services.copilot_client import CopilotStudioClient
-from app.services.copilot_agent_plugin import CopilotAgentPlugin
+from app.services.agent_pool import AgentPoolManager
 from app.observability.telemetry import LLMCallTracker, TaskExecutionTracker
 
 
@@ -41,17 +39,36 @@ class PluginTaskExecutor:
         )
         
         # Initialize agent information
-        self.agents = {}
+        self.agents = []
         for member in self.crew_members:
             agent = self.db.query(Agent).filter(Agent.id == member.agent_id).first()
-            self.agents[agent.copilot_id] = {
-                "agent": agent,
-                "role": member.role
-            }
+            if agent:
+                self.agents.append(agent)
         
         # Initialize Semantic Kernel components
         self.kernel = None
         self.llm_model = "gpt-4"  # Will be updated during setup
+        self.agent_pool = None
+    
+    def _sanitize_plugin_name(self, name: str) -> str:
+        """
+        Sanitize a name to be used as a plugin name.
+        Plugin names must match the pattern ^[0-9A-Za-z_]+$
+        
+        Args:
+            name: The name to sanitize
+            
+        Returns:
+            A sanitized name that can be used as a plugin name
+        """
+        # Replace spaces and non-alphanumeric characters with underscores
+        sanitized = re.sub(r'[^0-9A-Za-z_]', '_', name)
+        
+        # Ensure the name starts with a letter or underscore (not a number)
+        if sanitized and sanitized[0].isdigit():
+            sanitized = f"_{sanitized}"
+            
+        return sanitized
     
     async def setup_kernel(self):
         """Initialize Semantic Kernel with OpenAI backend and agent plugins"""
@@ -81,20 +98,18 @@ class PluginTaskExecutor:
                 )
             )
         
-        # Register all agents as plugins
-        for agent_id, info in self.agents.items():
-            agent = info["agent"]
-            plugin = CopilotAgentPlugin(
-                agent_id=agent_id,
-                agent_name=agent.name,
-                direct_line_secret=agent.direct_line_secret,
-                capabilities=agent.capabilities,
-                role=info["role"],
-                task_id=self.task_id
-            )
-            
-            # Add the plugin to the kernel
-            self.kernel.add_plugin(plugin, plugin_name=f"{agent.name.replace(' ', '')}Plugin")
+        # Create an AgentPool instance using the AgentPoolManager
+        self.agent_pool = AgentPoolManager.create_agent_pool(
+            crew_members=self.crew_members,
+            agents=self.agents,
+            task_id=self.task_id
+        )
+        
+        # Create a valid plugin name
+        plugin_name = self._sanitize_plugin_name(f"{self.crew.name}Agents")
+        
+        # Register the agent pool with the kernel
+        AgentPoolManager.register_with_kernel(self.agent_pool, self.kernel, plugin_name=plugin_name)
     
     def create_orchestration_function(self):
         """Create a semantic function for task orchestration"""
@@ -108,17 +123,21 @@ class PluginTaskExecutor:
         CREW NAME:
         {{$crew_name}}
         
-        Your job is to solve this task by using the available agent functions. Each agent has specific capabilities.
-        You can ask agents questions, give them subtasks, and use their responses to build a comprehensive solution.
+        IMPORTANT: You must DIRECTLY CALL the available agent functions to complete this task. 
+        DO NOT write pseudocode or describe what you would do - actually execute the task by calling 
+        the appropriate agent functions that are available to you.
+        
+        The agent functions are already registered and ready to use - you just need to call them.
+        DO NOT try to define new functions or create mock implementations.
         
         Think step by step:
         1. Break down the task into logical steps
         2. For each step, decide which agent would be best suited to handle it
-        3. Call the appropriate agent function with a clear, specific request
-        4. Use the agent's response to move forward with your solution
+        3. DIRECTLY CALL the appropriate agent function with a clear, specific request
+        4. Use the agent's response as your answer or to inform the next step
         5. If needed, ask follow-up questions to the same or different agents
         
-        Provide a comprehensive final answer that fully addresses the original task.
+        Your final response should be the ACTUAL RESULT of the task, not a plan or pseudocode.
         """
         
         # Create the orchestrator function
