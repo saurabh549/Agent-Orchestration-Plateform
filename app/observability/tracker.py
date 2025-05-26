@@ -5,108 +5,99 @@ from contextlib import contextmanager
 from app.db.session import get_db
 from app.observability.crud import ObservabilityCRUD
 
-class AnalyticsTracker:
-    """Utility class for tracking LLM and agent calls"""
+class LLMCallTracker:
+    def __init__(self, model: str, function_name: str, prompt: str):
+        self.model = model
+        self.function_name = function_name
+        self.prompt = prompt
+        self.start_time = None
+        self.completion = None
+        self.error_message = None
+        self.completion_tokens = 0
+        self.prompt_tokens = len(prompt.split())  # Simple approximation
 
-    @staticmethod
-    @contextmanager
-    def track_llm_call(
-        model: str,
-        function_name: str,
-        prompt: str,
-    ):
-        """
-        Context manager to track LLM API calls.
-        Usage:
-            with AnalyticsTracker.track_llm_call("gpt-4", "generate_response", prompt) as tracker:
-                response = llm.generate(prompt)
-                tracker.record_completion(response)
-        """
-        start_time = time.time()
-        completion_tokens = 0
-        prompt_tokens = len(prompt.split())  # Simple approximation
-        error_message = None
-        response = None
+    def record_completion(self, response: str, tokens: Optional[int] = None):
+        self.completion = (response, tokens)
 
+    def __enter__(self):
+        self.start_time = time.time()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
         try:
-            yield lambda response, tokens=None: setattr(tracker, 'completion', (response, tokens))
+            if exc_type is not None:
+                self.error_message = str(exc_val)
+                
+            # Process completion if available
+            response = None
+            if self.completion:
+                response, completion_tokens = self.completion
+                self.completion_tokens = completion_tokens if completion_tokens is not None else len(response.split()) if response else 0
             
-            # After the context, get the completion
-            if hasattr(tracker, 'completion'):
-                response, completion_tokens = tracker.completion
-                if completion_tokens is None:
-                    completion_tokens = len(response.split()) if response else 0
-            
-        except Exception as e:
-            error_message = str(e)
-            raise
-        finally:
-            elapsed_time = time.time() - start_time
+            elapsed_time = time.time() - self.start_time
             
             # Estimate cost based on model and tokens
-            cost = estimate_llm_cost(model, prompt_tokens, completion_tokens)
+            cost = estimate_llm_cost(self.model, self.prompt_tokens, self.completion_tokens)
             
             # Store in database
             db = next(get_db())
             ObservabilityCRUD.create_llm_call(
                 db=db,
-                model=model,
-                function_name=function_name,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
+                model=self.model,
+                function_name=self.function_name,
+                prompt_tokens=self.prompt_tokens,
+                completion_tokens=self.completion_tokens,
                 latency=elapsed_time,
                 cost=cost,
-                status="error" if error_message else "success",
-                prompt=prompt,
+                status="error" if self.error_message else "success",
+                prompt=self.prompt,
                 response=response,
-                error_message=error_message,
+                error_message=self.error_message,
             )
-
-    @staticmethod
-    @contextmanager
-    def track_agent_execution(
-        agent_id: str,
-        agent_name: str,
-        input_message: str,
-        metadata: Optional[Dict[str, Any]] = None,
-    ):
-        """
-        Context manager to track agent executions.
-        Usage:
-            with AnalyticsTracker.track_agent_execution("agent123", "code_assistant", input_msg) as tracker:
-                response = agent.execute(input_msg)
-                tracker.record_response(response)
-        """
-        start_time = time.time()
-        error_message = None
-        output_message = None
-
-        try:
-            yield lambda response: setattr(tracker, 'response', response)
-            
-            # After the context, get the response
-            if hasattr(tracker, 'response'):
-                output_message = tracker.response
-            
         except Exception as e:
-            error_message = str(e)
-            raise
-        finally:
-            elapsed_time = time.time() - start_time
+            # Log the error but don't raise it to ensure cleanup
+            print(f"Error in LLMCallTracker cleanup: {str(e)}")
+
+class AgentExecutionTracker:
+    def __init__(self, agent_id: str, agent_name: str, input_message: str, metadata: Optional[Dict[str, Any]] = None):
+        self.agent_id = agent_id
+        self.agent_name = agent_name
+        self.input_message = input_message
+        self.metadata = metadata
+        self.start_time = None
+        self.response = None
+        self.error_message = None
+
+    def record_response(self, response: str):
+        self.response = response
+
+    def __enter__(self):
+        self.start_time = time.time()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            if exc_type is not None:
+                self.error_message = str(exc_val)
+            
+            elapsed_time = time.time() - self.start_time
             
             # Store in database
             db = next(get_db())
             ObservabilityCRUD.create_agent_execution(
                 db=db,
-                agent_id=agent_id,
-                agent_name=agent_name,
-                status="error" if error_message else "success",
+                agent_id=self.agent_id,
+                agent_name=self.agent_name,
+                status="error" if self.error_message else "success",
                 latency=elapsed_time,
-                input_message=input_message,
-                output_message=output_message,
-                error_message=error_message,
-                metadata=metadata,
+                input_message=self.input_message,
+                output_message=self.response,
+                error_message=self.error_message,
+                metadata=self.metadata,
             )
+        except Exception as e:
+            # Log the error but don't raise it to ensure cleanup
+            print(f"Error in AgentExecutionTracker cleanup: {str(e)}")
 
 def estimate_llm_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
     """Estimate cost based on token usage and model"""
