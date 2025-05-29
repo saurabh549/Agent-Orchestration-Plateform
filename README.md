@@ -84,7 +84,6 @@ The AI Agent Orchestration Platform allows you to create, manage, and orchestrat
 4. Create a `.env` file with your configuration:
    ```
    SECRET_KEY=your-secret-key
-   DIRECT_LINE_SECRET=your-copilot-studio-direct-line-secret
    OPENAI_API_KEY=your-openai-api-key
    # Or for Azure OpenAI:
    # AZURE_OPENAI_API_KEY=your-azure-openai-api-key
@@ -199,15 +198,13 @@ The platform provides a RESTful API with the following endpoints:
 - **Request Body**:
   ```json
   {
-    "name": "Research Assistant",
-    "description": "Helps with research tasks",
-    "copilot_id": "12345-abcde",
-    "capabilities": {
-      "research": true,
-      "summarization": true
-    }
+    "name": "Agent Name",
+    "description": "Agent Description",
+    "direct_line_secret": "your-copilot-studio-direct-line-secret",
+    "capabilities": ["capability1", "capability2"]
   }
   ```
+  Note: Each agent requires its own Direct Line secret from Copilot Studio.
 
 #### Get Agent
 

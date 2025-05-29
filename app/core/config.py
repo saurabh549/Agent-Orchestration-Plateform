@@ -28,8 +28,6 @@ class Settings(BaseSettings):
         "DATABASE_URL", "sqlite:///./test.db"
     )
     
-    # Copilot Studio Direct Line API
-    DIRECT_LINE_SECRET: str = os.environ.get("DIRECT_LINE_SECRET", "")
     
     # Semantic Kernel
     OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
